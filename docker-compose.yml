@@ -1,0 +1,180 @@
+# ================================================================
+# docker-compose.yml — TechStore Microservices
+# Orquesta: PostgreSQL, pgAdmin, auth-service,
+#           rbac-service, product-service, gateway, frontend
+# ================================================================
+
+version: '3.9'
+
+networks:
+  techstore-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+services:
+
+  # ──────────────────────────────────────────
+  # BASE DE DATOS
+  # ──────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: techstore-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - techstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────
+  # PGADMIN
+  # ──────────────────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: techstore-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL:    ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "${PGADMIN_PORT}:80"
+    networks:
+      - techstore-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────
+  # AUTH SERVICE
+  # ──────────────────────────────────────────
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: techstore-auth
+    restart: unless-stopped
+    environment:
+      PORT:              3001
+      DB_HOST:           postgres
+      DB_PORT:           5432
+      DB_NAME:           ${POSTGRES_DB}
+      DB_USER:           ${POSTGRES_USER}
+      DB_PASSWORD:       ${POSTGRES_PASSWORD}
+      JWT_SECRET:        ${JWT_SECRET}
+      JWT_EXPIRES_IN:    ${JWT_EXPIRES_IN}
+      JWT_MFA_TEMP_EXPIRES_IN: ${JWT_MFA_TEMP_EXPIRES_IN}
+      NODE_ENV:          production
+    ports:
+      - "${AUTH_PORT}:3001"
+    networks:
+      - techstore-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────
+  # RBAC SERVICE
+  # ──────────────────────────────────────────
+  rbac-service:
+    build:
+      context: ./rbac-service
+      dockerfile: Dockerfile
+    container_name: techstore-rbac
+    restart: unless-stopped
+    environment:
+      PORT:          3002
+      DB_HOST:       postgres
+      DB_PORT:       5432
+      DB_NAME:       ${POSTGRES_DB}
+      DB_USER:       ${POSTGRES_USER}
+      DB_PASSWORD:   ${POSTGRES_PASSWORD}
+      NODE_ENV:      production
+    ports:
+      - "${RBAC_PORT}:3002"
+    networks:
+      - techstore-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────
+  # PRODUCT SERVICE
+  # ──────────────────────────────────────────
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: techstore-products
+    restart: unless-stopped
+    environment:
+      PORT:          3003
+      DB_HOST:       postgres
+      DB_PORT:       5432
+      DB_NAME:       ${POSTGRES_DB}
+      DB_USER:       ${POSTGRES_USER}
+      DB_PASSWORD:   ${POSTGRES_PASSWORD}
+      NODE_ENV:      production
+    ports:
+      - "${PRODUCT_PORT}:3003"
+    networks:
+      - techstore-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────
+  # API GATEWAY
+  # ──────────────────────────────────────────
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: techstore-gateway
+    restart: unless-stopped
+    environment:
+      PORT:                3000
+      JWT_SECRET:          ${JWT_SECRET}
+      AUTH_SERVICE_URL:    ${AUTH_SERVICE_URL}
+      RBAC_SERVICE_URL:    ${RBAC_SERVICE_URL}
+      PRODUCT_SERVICE_URL: ${PRODUCT_SERVICE_URL}
+      NODE_ENV:            production
+    ports:
+      - "${GATEWAY_PORT}:3000"
+    networks:
+      - techstore-network
+    depends_on:
+      - auth-service
+      - rbac-service
+      - product-service
+
+  # ──────────────────────────────────────────
+  # FRONTEND
+  # ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: techstore-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks:
+      - techstore-network
+    depends_on:
+      - gateway
